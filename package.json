@@ -1,0 +1,12 @@
+{
+  "name": "yt2mp3-server",
+  "version": "1.0.0",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "build": "pip install yt-dlp"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
