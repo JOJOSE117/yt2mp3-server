@@ -5,34 +5,40 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Instalar yt-dlp en runtime si no está disponible
 function ensureYtDlp() {
     try {
-        execSync('python3 -c "import yt_dlp"', { env: process.env });
-        console.log('yt-dlp ya está disponible');
-        return true;
+        execSync('python3 -c "import yt_dlp"');
+        console.log('yt-dlp disponible');
     } catch(e) {
-        console.log('Instalando yt-dlp en runtime...');
-        try {
-            execSync('python3 -m pip install yt-dlp --quiet --break-system-packages', {
-                timeout: 60000,
-                env: process.env
-            });
-            console.log('yt-dlp instalado exitosamente');
-            return true;
-        } catch(e2) {
-            console.error('Error instalando yt-dlp:', e2.message);
-            return false;
-        }
+        console.log('Instalando yt-dlp...');
+        execSync('python3 -m pip install yt-dlp --quiet --break-system-packages', {
+            timeout: 60000
+        });
+    }
+}
+
+function getDenoPath() {
+    try {
+        const p = execSync('which deno').toString().trim();
+        console.log(`Deno encontrado: ${p}`);
+        return p;
+    } catch(e) {
+        console.log('Deno no encontrado');
+        return null;
     }
 }
 
 ensureYtDlp();
+const denoPath = getDenoPath();
 
 app.get('/health', (req, res) => {
     try {
         const version = execSync('python3 -m yt_dlp --version').toString().trim();
-        res.json({ status: 'ok', ytdlp_version: version });
+        res.json({ 
+            status: 'ok', 
+            ytdlp_version: version,
+            deno: denoPath || 'no encontrado'
+        });
     } catch(e) {
         res.json({ status: 'error', message: e.message });
     }
@@ -46,17 +52,29 @@ app.get('/download', (req, res) => {
     if (!isYoutube) return res.status(400).json({ error: 'Solo URLs de YouTube' });
 
     const outputFile = `/tmp/audio_${Date.now()}.m4a`;
-    const cmd = `python3 -m yt_dlp -x --audio-format m4a --audio-quality 128K --no-playlist -o "${outputFile}" "${videoUrl}"`;
+    
+    // Construir comando con Deno si está disponible
+    let cmd = `python3 -m yt_dlp`;
+    if (denoPath) {
+        cmd += ` --js-runtimes deno`;
+    }
+    cmd += ` -x --audio-format m4a --audio-quality 128K --no-playlist`;
+    cmd += ` -o "${outputFile}" "${videoUrl}"`;
+
+    // Configurar entorno con Deno en PATH
+    const env = { ...process.env };
+    if (denoPath) {
+        const denoDir = denoPath.substring(0, denoPath.lastIndexOf('/'));
+        env.PATH = `${denoDir}:${process.env.PATH}`;
+        env.DENO_PATH = denoPath;
+    }
 
     console.log(`Ejecutando: ${cmd}`);
 
-    exec(cmd, { timeout: 180000, env: process.env }, (error, stdout, stderr) => {
+    exec(cmd, { timeout: 180000, env }, (error, stdout, stderr) => {
         if (error) {
-            console.error('Error:', stderr);
-            // Intentar reinstalar y reintentar una vez
-            try {
-                execSync('python3 -m pip install yt-dlp --upgrade --quiet --break-system-packages');
-            } catch(e) {}
+            console.error('stdout:', stdout);
+            console.error('stderr:', stderr);
             return res.status(500).json({ 
                 error: 'Error al procesar', 
                 details: stderr
