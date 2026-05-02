@@ -5,49 +5,37 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Buscar yt-dlp en todas las rutas posibles
-function findYtDlp() {
-    const paths = [
-        '/usr/local/bin/yt-dlp',
-        '/usr/bin/yt-dlp',
-        '/root/.local/bin/yt-dlp',
-        '/home/user/.local/bin/yt-dlp',
-        '/mise/installs/python/3.14.4/bin/yt-dlp',
-        '/mise/installs/python/3.14.3/bin/yt-dlp',
-        '/mise/installs/python/3.14.2/bin/yt-dlp',
-        '/mise/installs/python/3.13.0/bin/yt-dlp',
-    ];
-
-    // Intentar which primero
+// Instalar yt-dlp en runtime si no está disponible
+function ensureYtDlp() {
     try {
-        const result = execSync('find /mise -name "yt-dlp" 2>/dev/null | head -1')
-            .toString().trim();
-        if (result) {
-            console.log(`yt-dlp encontrado via find: ${result}`);
-            return result;
-        }
-    } catch(e) {}
-
-    // Buscar en rutas conocidas
-    for (const p of paths) {
-        if (fs.existsSync(p)) {
-            console.log(`yt-dlp encontrado en: ${p}`);
-            return p;
+        execSync('python3 -c "import yt_dlp"', { env: process.env });
+        console.log('yt-dlp ya está disponible');
+        return true;
+    } catch(e) {
+        console.log('Instalando yt-dlp en runtime...');
+        try {
+            execSync('python3 -m pip install yt-dlp --quiet --break-system-packages', {
+                timeout: 60000,
+                env: process.env
+            });
+            console.log('yt-dlp instalado exitosamente');
+            return true;
+        } catch(e2) {
+            console.error('Error instalando yt-dlp:', e2.message);
+            return false;
         }
     }
-
-    // Intentar con python -m yt_dlp
-    console.log('Usando python3 -m yt_dlp como fallback');
-    return null;
 }
 
-const ytdlpBin = findYtDlp();
-const ytdlpCmd = ytdlpBin ? `"${ytdlpBin}"` : 'python3 -m yt_dlp';
-
-console.log(`Usando comando: ${ytdlpCmd}`);
+ensureYtDlp();
 
 app.get('/health', (req, res) => {
-    res.json({ status: 'ok', cmd: ytdlpCmd });
+    try {
+        const version = execSync('python3 -m yt_dlp --version').toString().trim();
+        res.json({ status: 'ok', ytdlp_version: version });
+    } catch(e) {
+        res.json({ status: 'error', message: e.message });
+    }
 });
 
 app.get('/download', (req, res) => {
@@ -58,13 +46,17 @@ app.get('/download', (req, res) => {
     if (!isYoutube) return res.status(400).json({ error: 'Solo URLs de YouTube' });
 
     const outputFile = `/tmp/audio_${Date.now()}.m4a`;
-    const cmd = `${ytdlpCmd} -x --audio-format m4a --audio-quality 128K --no-playlist -o "${outputFile}" "${videoUrl}"`;
+    const cmd = `python3 -m yt_dlp -x --audio-format m4a --audio-quality 128K --no-playlist -o "${outputFile}" "${videoUrl}"`;
 
     console.log(`Ejecutando: ${cmd}`);
 
-    exec(cmd, { timeout: 180000 }, (error, stdout, stderr) => {
+    exec(cmd, { timeout: 180000, env: process.env }, (error, stdout, stderr) => {
         if (error) {
             console.error('Error:', stderr);
+            // Intentar reinstalar y reintentar una vez
+            try {
+                execSync('python3 -m pip install yt-dlp --upgrade --quiet --break-system-packages');
+            } catch(e) {}
             return res.status(500).json({ 
                 error: 'Error al procesar', 
                 details: stderr
@@ -87,5 +79,4 @@ app.get('/download', (req, res) => {
 
 app.listen(PORT, () => {
     console.log(`Servidor en puerto ${PORT}`);
-    console.log(`Comando yt-dlp: ${ytdlpCmd}`);
 });
