@@ -5,27 +5,49 @@ const fs = require('fs');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Encontrar dónde está instalado yt-dlp
-let ytdlpPath = 'yt-dlp';
-try {
-    ytdlpPath = execSync('which yt-dlp').toString().trim();
-    console.log(`yt-dlp encontrado en: ${ytdlpPath}`);
-} catch(e) {
+// Buscar yt-dlp en todas las rutas posibles
+function findYtDlp() {
+    const paths = [
+        '/usr/local/bin/yt-dlp',
+        '/usr/bin/yt-dlp',
+        '/root/.local/bin/yt-dlp',
+        '/home/user/.local/bin/yt-dlp',
+        '/mise/installs/python/3.14.4/bin/yt-dlp',
+        '/mise/installs/python/3.14.3/bin/yt-dlp',
+        '/mise/installs/python/3.14.2/bin/yt-dlp',
+        '/mise/installs/python/3.13.0/bin/yt-dlp',
+    ];
+
+    // Intentar which primero
     try {
-        ytdlpPath = execSync('which python3').toString().trim()
-            .replace('python3', '') + '../bin/yt-dlp';
-        console.log(`yt-dlp path alternativo: ${ytdlpPath}`);
-    } catch(e2) {
-        console.log('yt-dlp no encontrado, usando comando directo');
+        const result = execSync('find /mise -name "yt-dlp" 2>/dev/null | head -1')
+            .toString().trim();
+        if (result) {
+            console.log(`yt-dlp encontrado via find: ${result}`);
+            return result;
+        }
+    } catch(e) {}
+
+    // Buscar en rutas conocidas
+    for (const p of paths) {
+        if (fs.existsSync(p)) {
+            console.log(`yt-dlp encontrado en: ${p}`);
+            return p;
+        }
     }
+
+    // Intentar con python -m yt_dlp
+    console.log('Usando python3 -m yt_dlp como fallback');
+    return null;
 }
 
+const ytdlpBin = findYtDlp();
+const ytdlpCmd = ytdlpBin ? `"${ytdlpBin}"` : 'python3 -m yt_dlp';
+
+console.log(`Usando comando: ${ytdlpCmd}`);
+
 app.get('/health', (req, res) => {
-    res.json({ 
-        status: 'ok', 
-        ytdlp: ytdlpPath,
-        time: new Date().toISOString() 
-    });
+    res.json({ status: 'ok', cmd: ytdlpCmd });
 });
 
 app.get('/download', (req, res) => {
@@ -36,7 +58,7 @@ app.get('/download', (req, res) => {
     if (!isYoutube) return res.status(400).json({ error: 'Solo URLs de YouTube' });
 
     const outputFile = `/tmp/audio_${Date.now()}.m4a`;
-    const cmd = `"${ytdlpPath}" -x --audio-format m4a --audio-quality 128K --no-playlist -o "${outputFile}" "${videoUrl}"`;
+    const cmd = `${ytdlpCmd} -x --audio-format m4a --audio-quality 128K --no-playlist -o "${outputFile}" "${videoUrl}"`;
 
     console.log(`Ejecutando: ${cmd}`);
 
@@ -45,8 +67,7 @@ app.get('/download', (req, res) => {
             console.error('Error:', stderr);
             return res.status(500).json({ 
                 error: 'Error al procesar', 
-                details: stderr,
-                cmd: cmd
+                details: stderr
             });
         }
 
@@ -60,11 +81,11 @@ app.get('/download', (req, res) => {
         const stream = fs.createReadStream(outputFile);
         stream.pipe(res);
         stream.on('end', () => { try { fs.unlinkSync(outputFile); } catch(e) {} });
-        stream.on('error', () => res.status(500).json({ error: 'Error al enviar archivo' }));
+        stream.on('error', () => res.status(500).json({ error: 'Error al enviar' }));
     });
 });
 
 app.listen(PORT, () => {
     console.log(`Servidor en puerto ${PORT}`);
-    console.log(`yt-dlp path: ${ytdlpPath}`);
+    console.log(`Comando yt-dlp: ${ytdlpCmd}`);
 });
